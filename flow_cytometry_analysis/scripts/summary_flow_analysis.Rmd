@@ -1,0 +1,611 @@
+---
+title: "Flow Summary Analysis"
+output: html_notebook
+---
+
+# Read in data
+
+Clear environment, add libraries
+```{r}
+rm(list = ls())
+library(ggplot2)
+library(ggrepel)
+library(scales)
+library(forcats)
+library(munsell)
+library(ggh4x)
+library(wesanderson)
+library(jtools)
+library(gridExtra)
+```
+
+Provide info for all runs to be analyzed
+```{r}
+# Write in paths for all CSVs to be analyzed
+CSVs = c("../MEFL_data/e_coli_8.23.22_all_events.csv","../MEFL_data/p_putida_all_events.csv","../MEFL_data/c_necator_2.9.22_all_events.csv", "../MEFL_data/c_necator_2.10.22_all_events.csv", "../MEFL_data/c_necator_2.11.22_all_events.csv", "../MEFL_data/k_nataicola_2.23.22_all_events.csv", "../MEFL_data/k_nataicola_2.23.22_2_all_events.csv", "../MEFL_data/k_nataicola_2.24.22_all_events.csv", "../MEFL_data/k_nataicola_2.24.22_2_all_events.csv","../MEFL_data/k_nataicola_2.24.22_3_all_events.csv")
+
+# Provide filename to convert sample ID in output to meaningful ID
+sample_names = read.csv("../MEFL_data/sample_names.csv", header=TRUE)
+
+# Remove DOE oversampling replicates - some conditions had extra replicates for DOE analysis. To keep the number of samples the same for all conditions, only the first set of replicates for each condition will be analyzed.
+sample_names <- sample_names[!(sample_names$well == "H2" | sample_names$well == "B3" | sample_names$well == "D3" | sample_names$well == "E2"),]
+
+# Create a list of the species for each filename in CSVs, then pair them in a df
+species_list = c("e_coli", "p_putida", "c_necator", "c_necator", "c_necator", "k_nataicola", "k_nataicola", "k_nataicola", "k_nataicola", "k_nataicola")
+species_df <- data.frame(CSVs, species_list)
+
+# Initialize dataframe to be filled in from parsed CSVs
+df <- data.frame('promoter' = NA, 'rbs' = NA, 'replicate' = NA, 'run_id' = NA, 'species' = NA, 'MEFL' = NA, 'FSC' = NA, 'SSC' = NA)
+```
+
+Read in csv output of FlowCal analysis for all runs, parse and save to a dataframe
+
+```{r}
+for (file in CSVs) {
+  temp_df = read.csv(file, header=TRUE)
+  
+  # Need to translate "sample" from FlowCal output into promoter + RBS + replicate columns
+  # First add promoter and rbs columns from sample_names df
+  for (row in 1:nrow(sample_names)) {
+    temp_df$promoter[grepl(sample_names$well[row], temp_df$sample, fixed = TRUE)] <- sample_names$promoter[row]
+    temp_df$rbs[grepl(sample_names$well[row], temp_df$sample, fixed = TRUE)] <- sample_names$rbs[row]
+  }
+  # Pull out replicate number from flag -rep
+  nrep = 3
+  for (rep in 1:nrep){
+    temp_df$replicate[grepl(paste(c("-",rep),collapse=""), temp_df$sample, fixed = TRUE)] <- rep
+  }
+  # Add species
+  temp_df$species <- species_df$species_list[grepl(file,species_df$CSVs, fixed = TRUE)]
+  
+  # Add parsed data to overall df and remove temp df
+  df <- rbind(df,subset(temp_df, select = -sample))
+  rm(temp_df)
+}
+
+rm(rep,nrep,row,file)
+# Remove pesky initial NA row from df
+df <- df[complete.cases(df),]
+```
+
+Add growth defect information to dataframe
+
+```{r}
+# Make dataframe of samples that have growth defects
+defect_spec <- c(rep("c_necator",times=5),rep("k_nataicola",times=7))
+defect_pro <- c("J23106","J23103","J23103","J23100","J23100","J23103","J23103","J23103","J23106","J23103","J23106","J23106")
+defect_rbs <- c("RiboJ_BCD-2","RiboJ_BCD-2","B0033m","RiboJ_UTR1","RiboJ_BCD-2","B0033m","B0034m","BCD-2","B0033m","B0032m","B0034m","B0032m")
+defects <- data.frame(defect_spec,defect_pro,defect_rbs)
+rm(defect_spec,defect_pro,defect_rbs)
+
+
+# Add this info to main dataframe
+df$growth_defect <- "no"
+for (i in 1:length(defects$defect_pro)) {
+        df$growth_defect[df$species == defects$defect_spec[i] & df$promoter == defects$defect_pro[i] & df$rbs == defects$defect_rbs[i]] <- "yes"
+}
+rm(i)
+```
+
+Set factors as factors
+
+```{r}
+df$promoter <- as.factor(df$promoter)
+df$rbs <- as.factor(df$rbs)
+df$replicate <- as.factor(df$replicate)
+df$run_id <- as.factor(df$run_id)
+df$species <- as.factor(df$species)
+```
+
+Add column for MEFL with average empty vector MEFL subtracted, per run
+
+```{r}
+for (run in unique(df$run_id)){
+  mean_autofluorescence = mean(subset(df, run_id==run & promoter=='empty_vector')$MEFL)
+  df$MEFL_no_auto <- df$MEFL - mean_autofluorescence
+  rm(mean_autofluorescence)
+}
+rm(run)
+```
+
+# Violin plots
+
+Make violin plots
+```{r}
+# Make species lookup list
+spec.labs = c("e_coli" = "E. coli", "p_putida" = "P.putida", "c_necator" = "C. necator", "k_nataicola" = "K. nataicola")
+
+# Define plot settings
+for (specie in unique(df$species)){
+  # Define starting data
+  p <- ggplot(data=subset(df,replicate==1 & species == specie), aes(x=rbs, y=MEFL))
+  
+  # Format axes
+  p <- p + xlab(" ") + ylab("Fluorescence, MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  p <- p + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x)), limits = c(10**-0.75,10**6.5))
+  
+  # + ggtitle(paste("Fluorescent intensity", spec.labs[specie]))
+  
+  # Assign color to replicate 1
+  base_color <- "5B 5/6"
+  p <- p + geom_violin(colour=mnsl(base_color), fill=mnsl(lighter(base_color, 2)), outlier.colour="transparent")
+  
+  # Add replicates 2 and 3
+  p <- p + geom_violin(data = subset(df,replicate==2 & species == specie),colour = mnsl(rygbp(base_color, 2)),fill=mnsl(lighter(rygbp(base_color, 2),2)), outlier.colour="transparent")
+  p <- p + geom_violin(data = subset(df,replicate==3 & species == specie),colour = mnsl(pbgyr(base_color, 2)),fill=mnsl(lighter(pbgyr(base_color, 2),2)), outlier.colour="transparent")
+
+  # Facet labels
+  pro.labs <- c("Empty", "J23103", "J23106", "J23100")
+  names(pro.labs) <- c("empty_vector","J23103","J23106","J23100") 
+  
+  # Make facets
+  p <- p  +  facet_grid2(~fct_relevel(promoter,"empty_vector","J23103","J23106","J23100"),labeller = as_labeller(pro.labs), scales = "free", space = "free", strip = strip_vanilla(clip = "off",size = "variable"))
+
+  # Display Plot
+  #p
+  # Save plot
+  setwd("../outputs")
+  ggsave(paste(c(specie,"violins.pdf"),collapse="_"), p, device = "pdf", width = 7, height = 5, units ="in")
+}
+```
+
+
+# Lookup tables
+
+Make summary / lookup table of positive and negative numbers
+
+```{r}
+# Make new dataframe containing arithmetic mean of each promoter/rbs pair, pooling replicates
+df_summary = setNames(data.frame(matrix(ncol = 6, nrow = 0)), c("mean","std_err", "species","rbs","promoter","growth_defect"))
+
+for (specie in unique(df$species)) {
+  for (pro in unique(df$promoter[! df$promoter %in% "empty_vector"])) {
+      for (rb in unique(df$rbs[! df$rbs %in% "empty_vector"])) {
+        df_summary_row <- cbind(data.frame("mean" = mean(subset(df,df$species==specie & df$promoter==pro & df$rbs ==rb)$MEFL)), data.frame("std_err" = sd(subset(df,df$species==specie & df$promoter==pro & df$rbs ==rb)$MEFL)/sqrt(length(subset(df,df$species==specie & df$promoter==pro & df$rbs ==rb)$MEFL))), data.frame("species" = specie), data.frame("rbs" = rb), data.frame("promoter" = pro), data.frame("growth_defect" = unique(df$growth_defect[df$species==specie & df$promoter==pro & df$rbs==rb])))
+        df_summary = rbind(df_summary,df_summary_row)
+      }
+  }
+}
+
+rm(df_summary_row)
+
+df_summary$species <- as.factor(df_summary$species)
+df_summary$growth_defect <- as.factor(df_summary$growth_defect)
+
+write.csv(df_summary,"../outputs/mean_summary.csv",row.names = FALSE)
+```
+
+
+Calculate 95% CI of means and add them to summary df
+```{r}
+alpha = 0.05
+df_summary$CI_95_LB <- df_summary$mean - qnorm(1-alpha/2)*df_summary$std_err
+df_summary$CI_95_UB <- df_summary$mean + qnorm(1-alpha/2)*df_summary$std_err
+```
+
+Make plots of mean
+```{r}
+# Put in data
+p <- ggplot(df_summary, aes(x=fct_relevel(promoter, "J23103", "J23106", "J23100"), y=mean, label = rbs, fill = growth_defect)) 
+
+# Labeling stuff
+spec.labs <- c("E. coli", "P. putida", "C. necator", "K. nataicola")
+names(spec.labs) <- c("e_coli", "p_putida", "c_necator", "k_nataicola")
+
+# Add formatting
+p <- p + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x))) + geom_point(size=2, shape=23) + facet_wrap(~fct_relevel(species,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs)) + geom_text_repel(size=2) + xlab("Promoter") + ylab("Mean MEFL") + guides(fill = guide_legend(title = "Growth defect", reverse = TRUE)) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+# Save and display plot
+ggsave(filename="../outputs/arithmetic_mean_LUT.pdf")
+p
+```
+
+Make separate dataframe for positive values of MEFL only (negative values result from conversion of voltage -> AU -> MEFL)
+
+```{r}
+# Pull out a new df of only positive values
+pos_df <- subset(df, df$MEFL > 0)
+
+# Number of rows deleted
+print("Number of observations omitted due to negative MEFL values")
+length(df$MEFL) - length(pos_df$MEFL)
+```
+
+
+Make summary / lookup table of positive numbers only
+
+```{r}
+# Make new dataframe containing geometric mean of each promoter/rbs pair, pooling replicates
+pos_df_summary = setNames(data.frame(matrix(ncol = 7, nrow = 0)), c("mean","std_err","gmean", "species","rbs","promoter","growth_defect"))
+
+for (specie in unique(pos_df$species)) {
+  for (pro in unique(pos_df$promoter[! pos_df$promoter %in% "empty_vector"])) {
+      for (rb in unique(pos_df$rbs[! pos_df$rbs %in% "empty_vector"])) {
+        pos_df_summary_row <- cbind(data.frame("mean" = mean(subset(pos_df,pos_df$species==specie & pos_df$promoter==pro & pos_df$rbs ==rb)$MEFL)), data.frame("std_err" = sd(subset(pos_df,pos_df$species==specie & pos_df$promoter==pro & pos_df$rbs ==rb)$MEFL)/sqrt(length(subset(pos_df,pos_df$species==specie & pos_df$promoter==pro & pos_df$rbs ==rb)$MEFL))), data.frame("gmean" = exp(mean(log(subset(pos_df,pos_df$species==specie & pos_df$promoter==pro & pos_df$rbs ==rb)$MEFL)))), data.frame("species" = specie), data.frame("rbs" = rb), data.frame("promoter" = pro), data.frame("growth_defect" = unique(pos_df$growth_defect[pos_df$species==specie & pos_df$promoter==pro & pos_df$rbs==rb])))
+        pos_df_summary = rbind(pos_df_summary,pos_df_summary_row)
+      }
+  }
+}
+
+rm(pos_df_summary_row)
+
+pos_df_summary$species <- as.factor(pos_df_summary$species)
+pos_df_summary$growth_defect <- as.factor(pos_df_summary$growth_defect)
+
+write.csv(pos_df_summary,"../outputs/gmean_summary.csv",row.names = FALSE)
+```
+
+Calculate 95% CI of means and add them to summary df
+```{r}
+alpha = 0.05
+pos_df_summary$CI_95_LB <- pos_df_summary$gmean - qnorm(1-alpha/2)*pos_df_summary$std_err
+pos_df_summary$CI_95_UB <- pos_df_summary$gmean + qnorm(1-alpha/2)*pos_df_summary$std_err
+```
+
+Make plots of mean
+
+```{r}
+# Put in data
+p <- ggplot(pos_df_summary, aes(x=fct_relevel(promoter, "J23103", "J23106", "J23100"), y=gmean, label = rbs, fill = growth_defect)) 
+
+# Labeling stuff
+spec.labs <- c("E. coli", "P. putida", "C. necator", "K. nataicola")
+names(spec.labs) <- c("e_coli", "p_putida", "c_necator", "k_nataicola")
+
+# Add formatting
+p <- p + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x))) + geom_point(size=2, shape=23) + facet_wrap(~fct_relevel(species,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs)) + geom_text_repel(size=2) + ggtitle("Standardized measurements enable equivalent part lookup across species") + xlab("Promoter") + ylab(" Geometric mean MEFL") + guides(fill = guide_legend(title = "Growth defect", reverse = TRUE)) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + geom_errorbar(aes(ymin = CI_95_LB, ymax = CI_95_UB),width=0.25,size=0.25)
+
+# Save and display plot
+ggsave(filename="../outputs/gmean_LUT_w_error.pdf")
+p
+```
+
+# Original CIDAR comparison
+
+Import original CIDAR study values and graph against openCIDAR constructs
+
+```{r}
+# Import original CIDAR values
+og_cidar = read.csv("../MEFL_data/CIDAR_MEFL_values.csv", header=TRUE)
+```
+
+Make plots
+
+Need to fix code below - missing openCIDAR data
+
+```{r}
+# Put in data
+p2 <- ggplot(og_cidar, aes(x=rbs, y=gmean, label = rbs)) 
+
+# Labeling stuff
+#spec.labs <- c("E. coli", "P. putida", "C. necator", "K. nataicola")
+#names(spec.labs) <- c("e_coli", "p_putida", "c_necator", "k_nataicola")
+
+# Add formatting
+base_color <- "5B 5/6"
+
+p2 <- p2 + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x)), limits = c(10**-0.75,10**6.5)) + geom_point(size=3, shape=23, colour=mnsl(base_color), fill=mnsl(lighter(base_color, 2)), outlier.colour="transparent") + xlab("Promoter / RBS pair") + ylab(" Geometric mean MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_wrap(~fct_relevel(promoter,"J23103","J23106","J23100"), ncol=3)
+
+
+# Save and display plot
+ggsave(filename="../outputs/og_CIDAR_comparison.pdf")
+p2
+```
+
+# Rank order plots
+
+Combine promoter / RBS combination together into one variable
+
+```{r}
+# Concatenate promoter and rbs pairs together into blocking variables
+df$design <- paste(df$promoter,df$rbs,sep="_")
+df$design <- as.factor(df$design)
+```
+
+
+Question: do some of the strains have higher or lower expression than others, after subtracting autofluorescence and blocking by promoter/RBS combination?
+
+Look at rank order plots
+
+```{r}
+# Add design column to summary row
+df_summary$design <- paste(df_summary$promoter,df_summary$rbs,sep="_")
+df_summary$design <- as.factor(df_summary$design)
+
+# Make list 
+ec_sum = subset(df_summary,df_summary$species=="e_coli")
+ec_rank_order = reorder(ec_sum$design,ec_sum$mean)
+
+# Put in data
+p3 <- ggplot(df_summary, aes(x=fct_relevel(design,levels(ec_rank_order)), y=mean, fill = species))
+#p4 <- p3 + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x))) + geom_point(size=2, shape=23) + ggtitle("Rank order comparison") + xlab("Promoter / RBS pair") + ylab("Arithmetic mean MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +facet_wrap(~fct_relevel(species,"e_coli","p_putida","c_necator","k_nataicola"),ncol = 4)
+#ggsave(filename="../outputs/rank_order_comparison_facet.pdf")
+#p4
+p5 <- p3 + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x))) + geom_point(size=2, shape=23) + ggtitle("Rank order comparison") + xlab("Promoter / RBS pair") + ylab("Arithmetic mean MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_fill_discrete(name = "Species", labels = c("C. necator", "E. coli", "K. nataicola", "P. putida"))
+
+ggsave(filename="../outputs/rank_order_comparison.pdf")
+p5
+```
+Now for geometric mean with just positive data
+
+```{r}
+# Add design column to summary row
+pos_df_summary$design <- paste(pos_df_summary$promoter,pos_df_summary$rbs,sep="_")
+pos_df_summary$design <- as.factor(pos_df_summary$design)
+
+# Make list 
+pos_ec_sum = subset(pos_df_summary,pos_df_summary$species=="e_coli")
+pos_ec_rank_order = reorder(pos_ec_sum$design,pos_ec_sum$gmean)
+
+# Put in data
+p <- ggplot(pos_df_summary, aes(x=fct_relevel(design,levels(pos_ec_rank_order)), y=gmean, fill = species))
+p <- p + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x))) + geom_point(size=2, shape=23) + ggtitle("Rank order comparison") + xlab("Promoter / RBS pair") + ylab("Arithmetic mean MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_fill_discrete(name = "Species", labels = c("C. necator", "E. coli", "K. nataicola", "P. putida"))
+
+ggsave(filename="../outputs/gmean_rank_order_comparison.pdf")
+p
+```
+
+# Correlation plots
+
+```{r}
+p <- plot(pos_df_summary$gmean[pos_df_summary$species=="e_coli"],pos_df_summary$gmean[pos_df_summary$species=="p_putida"])
+p
+```
+
+```{r}
+gmean_corr_tb <- data.frame(ec = pos_df_summary$gmean[df_summary$species=="e_coli"], pp = pos_df_summary$gmean[df_summary$species=="p_putida"], cn = pos_df_summary$gmean[df_summary$species=="c_necator"], kn = pos_df_summary$gmean[df_summary$species=="k_nataicola"])
+
+#design = pos_df_summary$design[pos_df_summary$species=="e_coli"]
+```
+
+
+
+```{r}
+p <- ggplot(gmean_corr_tb, aes(x=log10(ec), y=log10(pp)))
+p <- p + geom_point(size=2, shape=23) + xlab("E. coli") + ylab("P. putida") #+ geom_smooth(method=lm)
+lm <- lm(log10(pp) ~ log10(ec), data = gmean_corr_tb)
+p <- p + geom_abline(intercept = coefficients(lm)[1], slope = coefficients(lm)[2]) + labs(caption=paste("R^2 = ", summary(lm)$r.squared))
+p
+```
+
+Using correlation table package
+
+```{r}
+chart.Correlation(gmean_corr_tb, histogram=FALSE, pch=19)
+```
+
+Try log-transformed
+
+```{r}
+log_gmean_corr_tb <- data.frame(E.coli = log10(pos_df_summary$gmean[df_summary$species=="e_coli"]), P.putida = log10(pos_df_summary$gmean[df_summary$species=="p_putida"]), C.necator = log10(pos_df_summary$gmean[df_summary$species=="c_necator"]), K.nataicola = log10(pos_df_summary$gmean[df_summary$species=="k_nataicola"]))
+
+chart.Correlation(log_gmean_corr_tb, histogram=FALSE, pch=19)
+```
+
+```{r}
+# Correlation panel
+panel.cor <- function(x, y){
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- round(cor(x, y), digits=2)
+    txt <- paste0("R = ", r)
+    cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+# Customize upper panel
+upper.panel<-function(x, y){
+  points(x,y, pch = 19)
+}
+# Create the plots
+pdf("../outputs/correlation_plot.pdf")
+pairs(log_gmean_corr_tb, 
+      lower.panel = panel.cor,
+      upper.panel = upper.panel)
+dev.off()
+```
+
+
+
+# Linear models
+
+Can we build a linear model for each strain by design?
+
+Here are some useful functions
+
+print()	simple printed display
+summary()	standard regression output
+coef()	(or coefficients()) extracting the regression coefficients
+residuals()	(or resid()) extracting residuals
+fitted()	(or fitted.values()) extracting fitted values
+anova()	comparison of nested models
+predict()	predictions for new data
+plot()	diagnostic plots
+confint()	confidence intervals for the regression coefficients
+deviance()	residual sum of squares
+vcov()	(estimated) variance-covariance matrix
+logLik()	log-likelihood (assuming normally distribted errors)
+AIC	information criteria including AIC, BIC/SBC (assuming normally distributed errors)
+
+```{r}
+# To try with log math, need to look at only positive values - add design to pos_df
+pos_df$design <- paste(pos_df$promoter,pos_df$rbs,sep="_")
+pos_df$design <- as.factor(pos_df$design)
+
+# Build linear models
+ec_design_lm <-lm(log10(MEFL) ~ design, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "e_coli"))
+summary(ec_design_lm)
+# Note - tried this with MEFL and log10(MEFL), R^2 improved from ~0.8 to 0.92
+
+pp_design_lm <-lm(log10(MEFL) ~ design, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "p_putida"))
+summary(pp_design_lm)
+
+cn_design_lm <-lm(log10(MEFL) ~ design, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "c_necator"))
+summary(cn_design_lm)
+
+kn_design_lm <-lm(log10(MEFL) ~ design, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "k_nataicola"))
+summary(kn_design_lm)
+```
+
+These above tables give us an estimate of a reference level based on promoter J23100 and rbs B0032m with adjustments up and down for each design. How do the models change when we separate out promoter and rbs? Note R^2 pretty low for Pp
+
+```{r}
+ec_pro_rbs_lm <-lm(log10(MEFL) ~ promoter+ rbs, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "e_coli"))
+summary(ec_pro_rbs_lm)
+
+pp_pro_rbs_lm <-lm(log10(MEFL) ~ promoter+ rbs, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "p_putida"))
+summary(pp_pro_rbs_lm)
+
+cn_pro_rbs_lm <-lm(log10(MEFL) ~ promoter+ rbs, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "c_necator"))
+summary(cn_pro_rbs_lm)
+
+kn_pro_rbs_lm <-lm(log10(MEFL) ~ promoter+ rbs, data = subset(pos_df,pos_df$promoter!="empty_vector" & pos_df$species == "k_nataicola"))
+summary(kn_pro_rbs_lm)
+```
+
+The center changes some, but we can also use this as a way to tease out "effect size" for each promoter or RBS in terms of driving expression very high or low from the middle. Note that the R^2 actually decreased for Ec...
+
+To get each factor teased out separately, can we set the empty vector as the reference level?
+
+```{r}
+# Make sure "empty_vector" is first level for promoter and rbs
+pos_df$rbs <- relevel(pos_df$rbs,"empty_vector")
+pos_df$promoter <- relevel(pos_df$promoter,"empty_vector")
+
+ec_pro_rbs_lm <-lm(log10(MEFL) ~ promoter + rbs, data = subset(pos_df, pos_df$species == "e_coli"))
+summary(ec_pro_rbs_lm)
+
+pp_pro_rbs_lm <-lm(log10(MEFL) ~ promoter + rbs, data = subset(pos_df, pos_df$species == "p_putida"))
+summary(pp_pro_rbs_lm)
+
+cn_pro_rbs_lm <-lm(log10(MEFL) ~ promoter + rbs, data = subset(pos_df, pos_df$species == "c_necator"))
+summary(cn_pro_rbs_lm)
+
+kn_pro_rbs_lm <-lm(log10(MEFL) ~ promoter + rbs, data = subset(pos_df, pos_df$species == "k_nataicola"))
+summary(kn_pro_rbs_lm)
+```
+
+Now with interactions
+
+```{r}
+ec_pro_rbs_int_lm <-lm(log10(MEFL) ~ promoter * rbs, data = subset(pos_df, pos_df$species == "e_coli"))
+summary(ec_pro_rbs_int_lm)
+
+pp_pro_rbs_int_lm <-lm(log10(MEFL) ~ promoter * rbs, data = subset(pos_df, pos_df$species == "p_putida"))
+summary(pp_pro_rbs_int_lm)
+
+cn_pro_rbs_int_lm <-lm(log10(MEFL) ~ promoter * rbs, data = subset(pos_df, pos_df$species == "c_necator"))
+summary(cn_pro_rbs_int_lm)
+
+kn_pro_rbs_int_lm <-lm(log10(MEFL) ~ promoter * rbs, data = subset(pos_df, pos_df$species == "k_nataicola"))
+summary(kn_pro_rbs_int_lm)
+```
+
+Data wrangling
+```{r}
+types <- c("intercept", rep("promoter",each=3), rep("RBS",each=5), rep("interaction",each=10))
+
+ec_est <- data.frame(summary(ec_pro_rbs_int_lm)$coefficients)
+ec_est$parameter <- row.names(ec_est)
+ec_est$org <- "e_coli"
+ec_est <- cbind.data.frame(ec_est,types)
+pp_est <- data.frame(summary(pp_pro_rbs_int_lm)$coefficients)
+pp_est$parameter <- row.names(pp_est)
+pp_est$org <- "p_putida"
+pp_est <- cbind.data.frame(pp_est,types)
+cn_est <- data.frame(summary(cn_pro_rbs_int_lm)$coefficients)
+cn_est$parameter <- row.names(cn_est)
+cn_est$org <- "c_necator"
+cn_est <- cbind.data.frame(cn_est,types)
+kn_est <- data.frame(summary(kn_pro_rbs_int_lm)$coefficients)
+kn_est$parameter <- row.names(kn_est)
+kn_est$org <- "k_nataicola"
+kn_est <- cbind.data.frame(kn_est,types)
+
+lm_est <- rbind.data.frame(ec_est,pp_est,cn_est,kn_est)
+```
+
+Plots
+```{r}
+spec.labs <- c("E. coli", "P. putida", "C. necator", "K. nataicola")
+names(spec.labs) <- c("e_coli", "p_putida", "c_necator", "k_nataicola")
+
+pal <- wes_palette("Darjeeling1",4,"discrete")
+
+p1 <- ggplot(subset(lm_est,types=="intercept"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity", fill=pal[1]) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),legend.position = "none") + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+p2 <- ggplot(subset(lm_est,types=="promoter"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity", fill=pal[2]) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),legend.position = "none") + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+p3 <- ggplot(subset(lm_est,types=="RBS"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity", fill=pal[3]) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),legend.position = "none") + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+p4 <- ggplot(subset(lm_est,types=="interaction"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity", fill=pal[4]) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),legend.position = "none") + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+pdf("../outputs/LM_4x4.pdf")
+grid.arrange(p1, p2, p3, p4, nrow=2)
+dev.off()
+```
+
+
+
+What happens if we exclude PJ23100 from the dataset
+
+```{r}
+kn_pro_rbs_int_lm_no100 <-lm(log10(MEFL) ~ promoter * rbs, data = subset(pos_df, pos_df$species == "k_nataicola" & pos_df$promoter != "J23100"))
+summary(kn_pro_rbs_int_lm_no100)
+
+kn_est_no100 <- data.frame(summary(kn_pro_rbs_int_lm_no100)$coefficients)
+kn_est_no100$parameter <- row.names(kn_est_no100)
+
+types <- c("intercept", rep("promoter",each=2), rep("RBS",each=5), rep("interaction",each=5))
+kn_est_no100$org <- "k_nataicola"
+kn_est_no100 <- cbind.data.frame(kn_est_no100,types)
+
+lm_est_2 <-rbind.data.frame(ec_est,pp_est,cn_est,kn_est_no100)
+```
+
+Plots
+```{r}
+spec.labs <- c("E. coli", "P. putida", "C. necator", "K. nataicola")
+names(spec.labs) <- c("e_coli", "p_putida", "c_necator", "k_nataicola")
+
+p1 <- ggplot(subset(lm_est_2,types=="intercept"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+p2 <- ggplot(subset(lm_est_2,types=="promoter"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+p3 <- ggplot(subset(lm_est_2,types=="RBS"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+p4 <- ggplot(subset(lm_est_2,types=="interaction"), aes(x=parameter, y=Estimate)) + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_wrap(~fct_relevel(org,"e_coli","p_putida","c_necator","k_nataicola"), ncol=4, labeller = as_labeller(spec.labs))
+
+pdf("../outputs/LM_2_4x4.pdf")
+grid.arrange(p1, p2, p3, p4, nrow=2)
+dev.off()
+```
+
+
+Need to figure out why coefficients aren't defined because of singularities - is it due to DoF? Interesting that adding in interatction terms changed R^2 so much with k_nataicola
+
+Can we use this to automatically pick out promoter / RBS pairs that have strong interactions (i.e. aren't orthogonal parts) and to also compare how parts drive expression? How to visualize this data?
+
+
+Can we also repeat this with species as a blocking variable?
+
+```{r}
+# reorder species levels so that e_coli is the base
+pos_df$species <- relevel(pos_df$species,"e_coli")
+
+all_spec_pro_rbs_lm <-lm(log10(MEFL) ~ promoter * rbs + species, data = subset(pos_df, pos_df$species=="e_coli" | pos_df$species=="c_necator"))
+summary(all_spec_pro_rbs_lm)
+```
+
+Can we plot vs. real data?
+```{r}
+lm2plot <-lm(log10(MEFL) ~ design, data = subset(pos_df, pos_df$species == "e_coli"))
+summary(lm2plot)
+```
+
+Plot
+```{r}
+plm <- plot(pos_df$design[pos_df$species=="e_coli"],pos_df$MEFL[pos_df$species=="e_coli"]) + abline(lm2plot)
+```
+
