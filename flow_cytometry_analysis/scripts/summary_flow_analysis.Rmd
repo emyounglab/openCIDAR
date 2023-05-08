@@ -2,11 +2,13 @@
 title: "Flow Summary Analysis"
 output: html_notebook
 ---
+Author: Kevin Keating
+Last updated: May 8 2023
 
 # Read in data
 
 Clear environment, add libraries
-```{r}
+```{r, echo=FALSE}
 rm(list = ls())
 library(ggplot2)
 library(ggrepel)
@@ -23,15 +25,15 @@ library(PerformanceAnalytics)
 Provide info for all runs to be analyzed
 ```{r}
 # Write in paths for all CSVs to be analyzed
-CSVs = c("../MEFL_data/e_coli_8.23.22_all_events.csv","../MEFL_data/p_putida_all_events.csv","../MEFL_data/c_necator_2.9.22_all_events.csv", "../MEFL_data/c_necator_2.10.22_all_events.csv", "../MEFL_data/c_necator_2.11.22_all_events.csv", "../MEFL_data/k_nataicola_2.23.22_all_events.csv", "../MEFL_data/k_nataicola_2.23.22_2_all_events.csv", "../MEFL_data/k_nataicola_2.24.22_all_events.csv", "../MEFL_data/k_nataicola_2.24.22_2_all_events.csv","../MEFL_data/k_nataicola_2.24.22_3_all_events.csv")
+CSVs = c("../run_data/e_coli_8.23.22_all_events.csv","../run_data/p_putida_all_events.csv","../run_data/c_necator_2.9.22_all_events.csv", "../run_data/c_necator_2.10.22_all_events.csv", "../run_data/c_necator_2.11.22_all_events.csv", "../run_data/k_nataicola_2.23.22_all_events.csv", "../run_data/k_nataicola_2.23.22_2_all_events.csv", "../run_data/k_nataicola_2.24.22_all_events.csv", "../run_data/k_nataicola_2.24.22_2_all_events.csv","../run_data/k_nataicola_2.24.22_3_all_events.csv")
 
 # Provide filename to convert sample ID in output to meaningful ID
-sample_names = read.csv("../MEFL_data/sample_names.csv", header=TRUE)
+sample_names = read.csv("../run_data/sample_names.csv", header=TRUE)
 
 # Remove DOE oversampling replicates - some conditions had extra replicates for DOE analysis. To keep the number of samples the same for all conditions, only the first set of replicates for each condition will be analyzed.
 sample_names <- sample_names[!(sample_names$well == "H2" | sample_names$well == "B3" | sample_names$well == "D3" | sample_names$well == "E2"),]
 
-# Create a list of the species for each filename in CSVs, then pair them in a df
+# Create a list of the species for each filename in CSVs, then pair them in a dataframe
 species_list = c("e_coli", "p_putida", "c_necator", "c_necator", "c_necator", "k_nataicola", "k_nataicola", "k_nataicola", "k_nataicola", "k_nataicola")
 species_df <- data.frame(CSVs, species_list)
 
@@ -40,6 +42,7 @@ df <- data.frame('promoter' = NA, 'rbs' = NA, 'replicate' = NA, 'run_id' = NA, '
 ```
 
 Read in csv output of FlowCal analysis for all runs, parse and save to a dataframe
+
 ```{r}
 for (file in CSVs) {
   temp_df = read.csv(file, header=TRUE)
@@ -110,7 +113,7 @@ rm(run)
 
 # Violin plots
 
-Make violin plots
+Make violin plots for figure 2
 ```{r}
 # Make species lookup list
 spec.labs = c("e_coli" = "E. coli", "p_putida" = "P.putida", "c_necator" = "C. necator", "k_nataicola" = "K. nataicola")
@@ -118,10 +121,10 @@ spec.labs = c("e_coli" = "E. coli", "p_putida" = "P.putida", "c_necator" = "C. n
 # Define plot settings
 for (specie in unique(df$species)){
   # Define starting data
-  p <- ggplot(data=subset(df,replicate==1 & species == specie), aes(x=rbs, y=MEFL))
+  p <- ggplot(data=subset(df,replicate==1 & species == specie), aes(x=rbs, y=MEFL), axis.ticks.x=element_blank())
   
   # Format axes
-  p <- p + xlab(" ") + ylab("Fluorescence, MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  p <- p + xlab(" ") + ylab("Fluorescence, MEFL") + theme(axis.text.x = element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_text(size=20), axis.title.y=element_text(size=20,face="bold"), strip.text.x = element_text(size=20))
   p <- p + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x)), limits = c(10**-0.75,10**6.5))
   
   # + ggtitle(paste("Fluorescent intensity", spec.labs[specie]))
@@ -135,7 +138,7 @@ for (specie in unique(df$species)){
   p <- p + geom_violin(data = subset(df,replicate==3 & species == specie),colour = mnsl(pbgyr(base_color, 2)),fill=mnsl(lighter(pbgyr(base_color, 2),2)), outlier.colour="transparent")
 
   # Facet labels
-  pro.labs <- c("Empty", "J23103", "J23106", "J23100")
+  pro.labs <- c("EV", "J23103", "J23106", "J23100")
   names(pro.labs) <- c("empty_vector","J23103","J23106","J23100") 
   
   # Make facets
@@ -152,7 +155,7 @@ for (specie in unique(df$species)){
 
 # Lookup tables
 
-Make summary / lookup table of positive and negative numbers
+Make summary / lookup table of all numbers, including negative values
 
 ```{r}
 # Make new dataframe containing arithmetic mean of each promoter/rbs pair, pooling replicates
@@ -175,7 +178,15 @@ df_summary$growth_defect <- as.factor(df_summary$growth_defect)
 write.csv(df_summary,"../outputs/mean_summary.csv",row.names = FALSE)
 ```
 
-Make plots of arithmetic mean
+
+Calculate 95% CI of means and add them to summary df
+```{r}
+alpha = 0.05
+df_summary$CI_95_LB <- df_summary$mean - qnorm(1-alpha/2)*df_summary$std_err
+df_summary$CI_95_UB <- df_summary$mean + qnorm(1-alpha/2)*df_summary$std_err
+```
+
+Make plots of mean - this generates figure 4 for openCIDAR paper
 ```{r}
 # Put in data
 p <- ggplot(df_summary, aes(x=fct_relevel(promoter, "J23103", "J23106", "J23100"), y=mean, label = rbs, fill = growth_defect)) 
@@ -193,15 +204,11 @@ ggsave(filename="../outputs/arithmetic_mean_LUT.pdf")
 p
 ```
 
-Make separate dataframe for positive values of MEFL only (negative values result from conversion of voltage -> AU -> MEFL). This will be used for geomeric mean and log calculations
+Make separate dataframe for positive values of MEFL only (negative values result from conversion of voltage -> AU -> MEFL)
 
 ```{r}
 # Pull out a new df of only positive values
 pos_df <- subset(df, df$MEFL > 0)
-
-# Number of rows deleted
-print("Number of observations omitted due to negative MEFL values")
-length(df$MEFL) - length(pos_df$MEFL)
 ```
 
 
@@ -231,14 +238,14 @@ write.csv(pos_df_summary,"../outputs/gmean_summary.csv",row.names = FALSE)
 
 # Original CIDAR comparison
 
-Import original CIDAR study values to compare to openCIDAR constructs. These were extraploated from the original CIDAR paper (Iverson et al. 2016) supplemental figure 1
+Import original CIDAR study values and graph against openCIDAR constructs
 
 ```{r}
 # Import original CIDAR values
-og_cidar = read.csv("../MEFL_data/CIDAR_MEFL_values.csv", header=TRUE)
+og_cidar = read.csv("../run_data/CIDAR_MEFL_values.csv", header=TRUE)
 ```
 
-Make plot
+Make plot (for Figure 2B)
 
 ```{r}
 # Put in data
@@ -247,7 +254,7 @@ p2 <- ggplot(og_cidar, aes(x=rbs, y=gmean, label = rbs))
 # Add formatting
 base_color <- "5B 5/6"
 
-p2 <- p2 + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x)), limits = c(10**-0.75,10**6.5)) + geom_point(size=3, shape=23, colour=mnsl(base_color), fill=mnsl(lighter(base_color, 2)), outlier.colour="transparent") + xlab("Promoter / RBS pair") + ylab(" Geometric mean MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_wrap(~fct_relevel(promoter,"J23103","J23106","J23100"), ncol=3)
+p2 <- p2 + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x)), limits = c(10**-0.75,10**6.5)) + geom_point(size=6, shape=23, colour=mnsl(base_color), fill=mnsl(lighter(base_color, 2)), outlier.colour="transparent") + xlab(" ") + ylab("Fluorescence, MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_wrap(~fct_relevel(promoter,"J23103","J23106","J23100"), ncol=3) + theme(axis.text.x = element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_text(size=20), axis.title.y=element_text(size=20,face="bold"), strip.text.x = element_text(size=20))
 
 
 # Save and display plot
@@ -257,55 +264,44 @@ p2
 
 # Rank order plots
 
-Combine promoter / RBS combination together into one variable
+Make rank roder plot for figure 3A
 
 ```{r}
-# Concatenate promoter and rbs pairs together into blocking variables
-df$design <- paste(df$promoter,df$rbs,sep="_")
-df$design <- as.factor(df$design)
-```
-
-Make rank order plots
-
-```{r}
-# Add design column to summary row
-df_summary$design <- paste(df_summary$promoter,df_summary$rbs,sep="_")
-df_summary$design <- as.factor(df_summary$design)
+# Add design column to summary row to combine promoter / RBS combination together into one variable
+pos_df_summary$design <- paste(pos_df_summary$promoter,pos_df_summary$rbs,sep="_")
+pos_df_summary$design <- as.factor(pos_df_summary$design)
 
 # Make list 
-ec_sum = subset(df_summary,df_summary$species=="e_coli")
-ec_rank_order = reorder(ec_sum$design,ec_sum$mean)
+pos_ec_sum = subset(pos_df_summary,pos_df_summary$species=="e_coli")
+pos_ec_rank_order = reorder(pos_ec_sum$design,pos_ec_sum$gmean)
 
 # Put in data
-p3 <- ggplot(df_summary, aes(x=fct_relevel(design,levels(ec_rank_order)), y=mean, fill = species))
-p5 <- p3 + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x))) + geom_point(size=2, shape=23) + ggtitle("Rank order comparison") + xlab("Promoter / RBS pair") + ylab("Arithmetic mean MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_fill_discrete(name = "Species", labels = c("C. necator", "E. coli", "K. nataicola", "P. putida"))
+p <- ggplot(pos_df_summary, aes(x=fct_relevel(design,levels(pos_ec_rank_order)), y=gmean, fill = species))
+p <- p + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x), labels = trans_format("log10", math_format(10^.x))) + geom_point(size=2, shape=23) + ggtitle("Rank order comparison") + xlab("Promoter / RBS pair") + ylab("Arithmetic mean MEFL") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_fill_discrete(name = "Species", labels = c("C. necator", "E. coli", "K. nataicola", "P. putida"))
 
-ggsave(filename="../outputs/rank_order_comparison.pdf")
-p5
+ggsave(filename="../outputs/gmean_rank_order_comparison.pdf")
+p
 ```
 
 # Correlation plots
-
-```{r}
-gmean_corr_tb <- data.frame(ec = pos_df_summary$gmean[df_summary$species=="e_coli"], pp = pos_df_summary$gmean[df_summary$species=="p_putida"], cn = pos_df_summary$gmean[df_summary$species=="c_necator"], kn = pos_df_summary$gmean[df_summary$species=="k_nataicola"])
-```
-
-Using correlation table package
 Log-transform data
+
 ```{r}
-log_gmean_corr_tb <- data.frame(E.coli = log10(pos_df_summary$gmean[df_summary$species=="e_coli"]), P.putida = log10(pos_df_summary$gmean[df_summary$species=="p_putida"]), C.necator = log10(pos_df_summary$gmean[df_summary$species=="c_necator"]), K.nataicola = log10(pos_df_summary$gmean[df_summary$species=="k_nataicola"]))
+log_gmean_corr_tb <- data.frame(E.coli = log10(pos_df_summary$gmean[pos_df_summary$species=="e_coli"]), P.putida = log10(pos_df_summary$gmean[pos_df_summary$species=="p_putida"]), C.necator = log10(pos_df_summary$gmean[pos_df_summary$species=="c_necator"]), K.nataicola = log10(pos_df_summary$gmean[pos_df_summary$species=="k_nataicola"]))
+
+chart.Correlation(log_gmean_corr_tb, histogram=FALSE, pch=19)
 ```
 
-Plot
+Correlation plot for figure 3B
+
 ```{r}
-# Correlation panel
+# Make correlation panel figure
 panel.cor <- function(x, y){
     usr <- par("usr"); on.exit(par(usr))
     par(usr = c(0, 1, 0, 1))
     r <- round(cor(x, y), digits=2)
     txt <- paste0("R = ", r)
-    cex.cor <- 0.8/strwidth(txt)
-    text(0.5, 0.5, txt, cex = cex.cor * r)
+    text(0.5, 0.5, txt, cex = 2)
 }
 # Customize upper panel
 upper.panel<-function(x, y){
@@ -319,8 +315,53 @@ pairs(log_gmean_corr_tb,
 dev.off()
 ```
 
+What happens when you include only J23103 and J23106 in the dataset? This script produces supp. fig 5
+
+```{r}
+log_gmean_corr_tb_no_J23100 <- data.frame(E.coli = log10(pos_df_summary$gmean[pos_df_summary$species=="e_coli" & pos_df_summary$promoter != "J23100"]), P.putida = log10(pos_df_summary$gmean[pos_df_summary$species=="p_putida" & pos_df_summary$promoter != "J23100"]), C.necator = log10(pos_df_summary$gmean[pos_df_summary$species=="c_necator" & pos_df_summary$promoter != "J23100"]), K.nataicola = log10(pos_df_summary$gmean[pos_df_summary$species=="k_nataicola" & pos_df_summary$promoter != "J23100"]))
+
+chart.Correlation(log_gmean_corr_tb_no_J23100, histogram=FALSE, pch=19)
+
+# Make correlation panel figure for paper
+panel.cor <- function(x, y){
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- round(cor(x, y), digits=2)
+    txt <- paste0("R = ", r)
+    text(0.5, 0.5, txt, cex = 2)
+}
+# Customize upper panel
+upper.panel<-function(x, y){
+  points(x,y, pch = 19)
+}
+# Create the plots
+pdf("../outputs/correlation_plot_no_J23100.pdf")
+pairs(log_gmean_corr_tb_no_J23100, 
+      lower.panel = panel.cor,
+      upper.panel = upper.panel)
+dev.off()
+```
+
 # Linear models
-Set the empty vector as the reference level
+
+Build linear models to describe data
+
+Note - here are some useful functions
+
+print()	simple printed display
+summary()	standard regression output
+coef()	(or coefficients()) extracting the regression coefficients
+residuals()	(or resid()) extracting residuals
+fitted()	(or fitted.values()) extracting fitted values
+anova()	comparison of nested models
+predict()	predictions for new data
+plot()	diagnostic plots
+confint()	confidence intervals for the regression coefficients
+deviance()	residual sum of squares
+vcov()	(estimated) variance-covariance matrix
+logLik()	log-likelihood (assuming normally distribted errors)
+AIC	information criteria including AIC, BIC/SBC (assuming normally distributed errors)
+
 
 ```{r}
 # Make sure "empty_vector" is first level for promoter and rbs
@@ -328,7 +369,7 @@ pos_df$rbs <- relevel(pos_df$rbs,"empty_vector")
 pos_df$promoter <- relevel(pos_df$promoter,"empty_vector")
 ```
 
-Build model with interactions
+Construct linear models with interactions - these are the ones used in figure 5
 
 ```{r}
 ec_pro_rbs_int_lm <-lm(log10(MEFL) ~ promoter * rbs, data = subset(pos_df, pos_df$species == "e_coli"))
@@ -344,7 +385,7 @@ kn_pro_rbs_int_lm <-lm(log10(MEFL) ~ promoter * rbs, data = subset(pos_df, pos_d
 summary(kn_pro_rbs_int_lm)
 ```
 
-Wrangle data
+Data wrangling
 ```{r}
 types <- c("intercept", rep("promoter",each=3), rep("RBS",each=5), rep("interaction",each=10))
 
@@ -368,9 +409,9 @@ kn_est <- cbind.data.frame(kn_est,types)
 lm_est <- rbind.data.frame(ec_est,pp_est,cn_est,kn_est)
 ```
 
-Make plots
+Plots - figure 5
 ```{r}
-spec.labs <- c("E. coli", "P. putida", "C. necator", "K. nataicola")
+sspec.labs <- c("E. coli", "P. putida", "C. necator", "K. nataicola")
 names(spec.labs) <- c("e_coli", "p_putida", "c_necator", "k_nataicola")
 
 pal <- wes_palette("Darjeeling1",4,"discrete")
@@ -387,3 +428,4 @@ pdf("../outputs/LM_4x4.pdf")
 grid.arrange(p1, p2, p3, p4, nrow=2)
 dev.off()
 ```
+
